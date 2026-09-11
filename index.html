@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebP Dönüştürücü – 200 KB Altı</title>
+  <meta name="description" content="Fotoğraflarınızı tarayıcıda, sunucuya yüklemeden 200 KB altında WebP formatına dönüştürün.">
+  <style>
+    :root {
+      --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #6b7280;
+      --line: #e3e6eb; --accent: #2563eb; --accent-dark: #1d4ed8; --ok: #16a34a; --warn: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+      padding: 40px 16px;
+    }
+    main { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 1.75rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 28px; }
+    .drop {
+      display: block; background: var(--card); border: 2px dashed var(--line); border-radius: 14px;
+      padding: 44px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .drop:hover, .drop.over { border-color: var(--accent); background: #f0f5ff; }
+    .drop strong { display: block; font-size: 1.1rem; margin-bottom: 4px; }
+    .drop span { color: var(--muted); font-size: .9rem; }
+    input[type=file] { display: none; }
+    .notice {
+      margin-top: 16px; padding: 12px 14px; border-radius: 10px; font-size: .9rem;
+      background: #fff7ed; color: var(--warn); border: 1px solid #fed7aa;
+    }
+    #list { margin-top: 24px; display: grid; gap: 12px; }
+    .item {
+      display: flex; gap: 14px; align-items: center; background: var(--card);
+      border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+    }
+    .item img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; background: var(--bg); flex-shrink: 0; }
+    .info { flex: 1; min-width: 0; }
+    .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta { color: var(--muted); font-size: .85rem; }
+    .meta b { color: var(--ok); font-weight: 600; }
+    .err { color: #dc2626; font-size: .85rem; }
+    .btn {
+      background: var(--accent); color: #fff; text-decoration: none; border: 0; border-radius: 8px;
+      padding: 9px 14px; font-size: .9rem; font-weight: 600; white-space: nowrap; cursor: pointer;
+    }
+    .btn:hover { background: var(--accent-dark); }
+    footer { margin-top: 32px; color: var(--muted); font-size: .8rem; text-align: center; }
+    @media (max-width: 480px) {
+      .item { flex-wrap: wrap; }
+      .item .btn { width: 100%; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>WebP Dönüştürücü</h1>
+    <p class="sub">Fotoğrafını yükle, 200 KB altında WebP olarak indir. Dosyalar sunucuya gönderilmez; her şey tarayıcında olur.</p>
+
+    <label class="drop" id="drop">
+      <strong>Fotoğraf seç veya buraya sürükle</strong>
+      <span>JPG, PNG, GIF, WebP · birden fazla seçebilirsin</span>
+      <input type="file" id="file" accept="image/*" multiple>
+    </label>
+
+    <div class="notice" id="notice" hidden>
+      Bu tarayıcı WebP kaydetmeyi desteklemiyor (genellikle Safari). Lütfen Chrome, Edge veya Firefox kullan.
+    </div>
+
+    <div id="list"></div>
+
+    <footer>Hedef boyut: 200 KB altı · Kalite önce düşürülür, gerekirse görsel küçültülür.</footer>
+  </main>
+
+  <script>
+    const MAX_BYTES = 200 * 1000;   // 200 KB (güvenli taraf: 195 KiB)
+    const MAX_SIDE  = 2560;         // çok büyük görselleri önce bu kenara sığdır
+    const MIN_Q     = 0.5;          // bu kalitenin altına inmeden önce boyutu küçült
+
+    const input = document.getElementById('file');
+    const drop = document.getElementById('drop');
+    const list = document.getElementById('list');
+    const notice = document.getElementById('notice');
+
+    // Tarayıcı WebP üretebiliyor mu?
+    const webpSupported = (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 1;
+      return c.toDataURL('image/webp').startsWith('data:image/webp');
+    })();
+    if (!webpSupported) notice.hidden = false;
+
+    input.addEventListener('change', () => { handle(input.files); input.value = ''; });
+    ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+    drop.addEventListener('drop', ev => handle(ev.dataTransfer.files));
+
+    function handle(files) {
+      if (!webpSupported) return;
+      [...files].filter(f => f.type.startsWith('image/')).forEach(convertAndShow);
+    }
+
+    const kb = b => (b / 1000).toFixed(b < 10000 ? 1 : 0) + ' KB';
+
+    function loadImage(file) {
+      return new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error('Görsel okunamadı'));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    const toBlob = (canvas, q) => new Promise(r => canvas.toBlob(r, 'image/webp', q));
+
+    async function encode(img, w, h) {
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, h);
+
+      // En yüksek kaliteyle sığıyorsa direkt dön
+      let best = await toBlob(canvas, 0.9);
+      if (best.size <= MAX_BYTES) return best;
+
+      // Kalite için ikili arama (sığan en yüksek kalite)
+      let lo = MIN_Q, hi = 0.9; best = null;
+      for (let i = 0; i < 7; i++) {
+        const mid = (lo + hi) / 2;
+        const blob = await toBlob(canvas, mid);
+        if (blob.size <= MAX_BYTES) { best = blob; lo = mid; } else { hi = mid; }
+      }
+      if (best) return best;
+      const atMin = await toBlob(canvas, MIN_Q);
+      return atMin.size <= MAX_BYTES ? atMin : null;
+    }
+
+    async function convert(file) {
+      const img = await loadImage(file);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+      w = Math.round(w * scale); h = Math.round(h * scale);
+
+      for (let step = 0; step < 12; step++) {
+        const blob = await encode(img, w, h);
+        if (blob) { URL.revokeObjectURL(img.src); return { blob, w, h }; }
+        w = Math.max(1, Math.round(w * 0.8)); h = Math.max(1, Math.round(h * 0.8));
+      }
+      throw new Error('200 KB altına indirilemedi');
+    }
+
+    async function convertAndShow(file) {
+      const row = document.createElement('div');
+      row.className = 'item';
+      row.innerHTML = `<img alt=""><div class="info"><div class="name"></div><div class="meta">Dönüştürülüyor…</div></div>`;
+      row.querySelector('.name').textContent = file.name;
+      list.prepend(row);
+
+      try {
+        const { blob, w, h } = await convert(file);
+        const url = URL.createObjectURL(blob);
+        const outName = file.name.replace(/\.[^.]+$/, '') + '.webp';
+        row.querySelector('img').src = url;
+        row.querySelector('.meta').innerHTML = `${kb(file.size)} → <b>${kb(blob.size)}</b> · ${w}×${h}px`;
+        const a = document.createElement('a');
+        a.className = 'btn'; a.href = url; a.download = outName; a.textContent = 'İndir';
+        row.appendChild(a);
+      } catch (e) {
+        row.querySelector('.meta').outerHTML = `<div class="err">${e.message}</div>`;
+      }
+    }
+  </script>
+</body>
+</html>
